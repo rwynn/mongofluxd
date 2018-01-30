@@ -6,11 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/globalsign/mgo"
+	"github.com/globalsign/mgo/bson"
 	"github.com/influxdata/influxdb/client/v2"
 	"github.com/rwynn/gtm"
 	"github.com/rwynn/mongofluxd/mongofluxdplug"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
 	"io/ioutil"
 	"log"
 	"net"
@@ -28,7 +28,7 @@ var infoLog *log.Logger = log.New(os.Stdout, "INFO ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.3.0"
+	Version               = "0.4.0"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
