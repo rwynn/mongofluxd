@@ -89,11 +89,14 @@ Load 100K documents of time series data into MongoDB.
 
 Run monfluxd with direct reads on test.test (config contents above)
 
-	time ./mongofluxd -f flux.toml
+	time ./mongofluxd -f ~/INFLUX.toml 
+	INFO 2018/03/17 14:58:02 Direct read parallel collection scan is ON
+	INFO 2018/03/17 14:58:02 Parallel collection scan command returned 7/10 cursors requested for test.test
+	INFO 2018/03/17 14:58:02 Starting 7 go routines to read test.test
 
-	real    0m1.982s
-	user    0m1.936s
-	sys     0m0.396s
+	real	0m1.432s
+	user	0m2.520s
+	sys	0m0.672s
 
 Verify it all got into InfluxDB
 
@@ -109,7 +112,7 @@ Verify it all got into InfluxDB
 
 
 On a VirtualBox VM with 4 virtual cores and 4096 mb of memory, syncing 100K documents from MongoDB to InfluxDB
-took only 1.936 seconds for a throughput of 50,454 points per second.
+took only 1.432 seconds for a throughput of ~ 70K points per second.
 
 ### Advanced
 
