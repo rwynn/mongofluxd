@@ -171,8 +171,6 @@ func MyPointMapper(input *mongofluxdplug.MongoDocument) (output []*mongofluxdplu
 		switch ptt := p.(type) {
 		case map[string]interface{}:
 			pt = ptt
-		case gtm.OpLogEntry:
-			pt = map[string]interface{}(ptt)
 		default:
 			return nil, fmt.Errorf("expected point of type %T but got %T", pt, p)
 		}

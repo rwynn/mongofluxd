@@ -6,11 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/globalsign/mgo"
+	"github.com/globalsign/mgo/bson"
 	"github.com/influxdata/influxdb/client/v2"
 	"github.com/rwynn/gtm"
 	"github.com/rwynn/mongofluxd/mongofluxdplug"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
 	"io/ioutil"
 	"log"
 	"net"
@@ -28,7 +28,7 @@ var infoLog *log.Logger = log.New(os.Stdout, "INFO ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.4.0"
+	Version               = "0.5.0"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
@@ -812,7 +812,7 @@ func main() {
 	}
 	gtmCtx := gtm.Start(mongo, &gtm.Options{
 		After:               after,
-		Filter:              filter,
+		NamespaceFilter:     filter,
 		OpLogDatabaseName:   oplogDatabaseName,
 		OpLogCollectionName: oplogCollectionName,
 		CursorTimeout:       cursorTimeout,
@@ -822,8 +822,6 @@ func main() {
 		BufferDuration:      gtmBufferDuration,
 		BufferSize:          config.GtmSettings.BufferSize,
 		DirectReadNs:        directReadNs,
-		DirectReadLimit:     1000,
-		DirectReadersPerCol: 1,
 	})
 	if config.DirectReads && config.ExitAfterDirectReads {
 		go func() {
@@ -835,8 +833,8 @@ func main() {
 	shutdownC := make(chan bool, config.InfluxClients)
 	var wg sync.WaitGroup
 	for i := 1; i <= config.InfluxClients; i++ {
+        wg.Add(1)
 		go func() {
-			wg.Add(1)
 			defer wg.Done()
 			flusher := time.NewTicker(1 * time.Second)
 			influx := &InfluxCtx{
