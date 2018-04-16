@@ -28,7 +28,7 @@ var infoLog *log.Logger = log.New(os.Stdout, "INFO ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.5.0"
+	Version               = "0.5.1"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
