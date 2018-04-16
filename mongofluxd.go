@@ -246,7 +246,13 @@ func (m *InfluxDataMap) isfieldtype(v interface{}) bool {
 	switch v.(type) {
 	case string:
 		return true
+	case int:
+		return true
+	case int32:
+		return true
 	case int64:
+		return true
+	case float32:
 		return true
 	case float64:
 		return true
