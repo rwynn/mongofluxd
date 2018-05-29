@@ -71,7 +71,6 @@ type configOptions struct {
 	MongoSkipVerify          bool                 `toml:"mongo-skip-verify"`
 	MongoOpLogDatabaseName   string               `toml:"mongo-oplog-database-name"`
 	MongoOpLogCollectionName string               `toml:"mongo-oplog-collection-name"`
-	MongoCursorTimeout       string               `toml:"mongo-cursor-timeout"`
 	MongoDialSettings        mongoDialSettings    `toml:"mongo-dial-settings"`
 	MongoSessionSettings     mongoSessionSettings `toml:"mongo-session-settings"`
 	GtmSettings              gtmSettings          `toml:"gtm-settings"`
@@ -463,7 +462,6 @@ func (config *configOptions) ParseCommandLineFlags() *configOptions {
 	flag.BoolVar(&config.MongoSkipVerify, "mongo-skip-verify", false, "Set to true to skip https certificate validator for MongoDB")
 	flag.StringVar(&config.MongoOpLogDatabaseName, "mongo-oplog-database-name", "", "Override the database name which contains the mongodb oplog")
 	flag.StringVar(&config.MongoOpLogCollectionName, "mongo-oplog-collection-name", "", "Override the collection name which contains the mongodb oplog")
-	flag.StringVar(&config.MongoCursorTimeout, "mongo-cursor-timeout", "", "Override the duration before a cursor timeout occurs when tailing the oplog")
 	flag.StringVar(&config.ConfigFile, "f", "", "Location of configuration file")
 	flag.BoolVar(&config.Version, "v", false, "True to print the version number")
 	flag.BoolVar(&config.Verbose, "verbose", false, "True to output verbose messages")
@@ -561,9 +559,6 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 		}
 		if config.MongoOpLogCollectionName == "" {
 			config.MongoOpLogCollectionName = tomlConfig.MongoOpLogCollectionName
-		}
-		if config.MongoCursorTimeout == "" {
-			config.MongoCursorTimeout = tomlConfig.MongoCursorTimeout
 		}
 		if !config.Verbose && tomlConfig.Verbose {
 			config.Verbose = true
@@ -778,15 +773,12 @@ func main() {
 	var filter gtm.OpFilter = nil
 	filterChain := []gtm.OpFilter{NotMongoFlux, config.onlyMeasured(), IsInsertOrUpdate}
 	filter = gtm.ChainOpFilters(filterChain...)
-	var oplogDatabaseName, oplogCollectionName, cursorTimeout *string
+	var oplogDatabaseName, oplogCollectionName *string
 	if config.MongoOpLogDatabaseName != "" {
 		oplogDatabaseName = &config.MongoOpLogDatabaseName
 	}
 	if config.MongoOpLogCollectionName != "" {
 		oplogCollectionName = &config.MongoOpLogCollectionName
-	}
-	if config.MongoCursorTimeout != "" {
-		cursorTimeout = &config.MongoCursorTimeout
 	}
 	gtmBufferDuration, err := time.ParseDuration(config.GtmSettings.BufferDuration)
 	if err != nil {
@@ -821,7 +813,6 @@ func main() {
 		NamespaceFilter:     filter,
 		OpLogDatabaseName:   oplogDatabaseName,
 		OpLogCollectionName: oplogCollectionName,
-		CursorTimeout:       cursorTimeout,
 		ChannelSize:         config.GtmSettings.ChannelSize,
 		Ordering:            gtm.Document,
 		WorkerCount:         4,
@@ -839,7 +830,7 @@ func main() {
 	shutdownC := make(chan bool, config.InfluxClients)
 	var wg sync.WaitGroup
 	for i := 1; i <= config.InfluxClients; i++ {
-        wg.Add(1)
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			flusher := time.NewTicker(1 * time.Second)
