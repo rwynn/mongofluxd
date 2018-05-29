@@ -701,7 +701,7 @@ func GtmDefaultSettings() gtmSettings {
 	return gtmSettings{
 		ChannelSize:    gtmChannelSizeDefault,
 		BufferSize:     32,
-		BufferDuration: "750ms",
+		BufferDuration: "75ms",
 	}
 }
 
@@ -814,7 +814,7 @@ func main() {
 		OpLogDatabaseName:   oplogDatabaseName,
 		OpLogCollectionName: oplogCollectionName,
 		ChannelSize:         config.GtmSettings.ChannelSize,
-		Ordering:            gtm.Document,
+		Ordering:            gtm.AnyOrder,
 		WorkerCount:         4,
 		BufferDuration:      gtmBufferDuration,
 		BufferSize:          config.GtmSettings.BufferSize,
