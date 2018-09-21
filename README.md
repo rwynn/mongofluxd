@@ -49,6 +49,9 @@ resume-name = "mongofluxd"
 verbose = false
 # output some information when points are written
 
+change-streams = true
+# you should turn on change streams but only if using MongoDB 3.6+
+
 direct-reads = true
 # read events directly out of mongodb collections in addition to tailing the oplog
 

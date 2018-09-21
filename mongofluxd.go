@@ -24,11 +24,13 @@ import (
 	"time"
 )
 
+var exitStatus = 0
 var infoLog *log.Logger = log.New(os.Stdout, "INFO ", log.Flags())
+var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.5.1"
+	Version               = "0.6.0"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
@@ -66,7 +68,7 @@ type measureSettings struct {
 }
 
 type configOptions struct {
-	MongoUrl                 string               `toml:"mongo-url"`
+	MongoURL                 string               `toml:"mongo-url"`
 	MongoPemFile             string               `toml:"mongo-pem-file"`
 	MongoSkipVerify          bool                 `toml:"mongo-skip-verify"`
 	MongoOpLogDatabaseName   string               `toml:"mongo-oplog-database-name"`
@@ -83,7 +85,7 @@ type configOptions struct {
 	Replay                   bool
 	ConfigFile               string
 	Measurement              []*measureSettings
-	InfluxUrl                string `toml:"influx-url"`
+	InfluxURL                string `toml:"influx-url"`
 	InfluxUser               string `toml:"influx-user"`
 	InfluxPassword           string `toml:"influx-password"`
 	InfluxSkipVerify         bool   `toml:"influx-skip-verify"`
@@ -92,6 +94,7 @@ type configOptions struct {
 	InfluxClients            int    `toml:"influx-clients"`
 	InfluxBufferSize         int    `toml:"influx-buffer-size"`
 	DirectReads              bool   `toml:"direct-reads"`
+	ChangeStreams            bool   `toml:"change-streams"`
 	ExitAfterDirectReads     bool   `toml:"exit-after-direct-reads"`
 	PluginPath               string `toml:"plugin-path"`
 }
@@ -286,7 +289,7 @@ func (m *InfluxDataMap) flatmap(prefix string, e map[string]interface{}) map[str
 }
 
 func (m *InfluxDataMap) unsupportedType(op *gtm.Op, k string, v interface{}, kind string) {
-	log.Printf("Unsupported type %T for %s %s in namespace %s\n", v, kind, k, op.Namespace)
+	errorLog.Printf("Unsupported type %T for %s %s in namespace %s\n", v, kind, k, op.Namespace)
 }
 
 func (m *InfluxDataMap) loadName() {
@@ -449,7 +452,7 @@ func (config *configOptions) onlyMeasured() gtm.OpFilter {
 }
 
 func (config *configOptions) ParseCommandLineFlags() *configOptions {
-	flag.StringVar(&config.InfluxUrl, "influx-url", "", "InfluxDB connection URL")
+	flag.StringVar(&config.InfluxURL, "influx-url", "", "InfluxDB connection URL")
 	flag.StringVar(&config.InfluxUser, "influx-user", "", "InfluxDB user name")
 	flag.StringVar(&config.InfluxPassword, "influx-password", "", "InfluxDB user password")
 	flag.BoolVar(&config.InfluxSkipVerify, "influx-skip-verify", false, "Set true to skip https certificate validation for InfluxDB")
@@ -457,7 +460,7 @@ func (config *configOptions) ParseCommandLineFlags() *configOptions {
 	flag.StringVar(&config.InfluxPemFile, "influx-pem-file", "", "Path to a PEM file for secure connections to InfluxDB")
 	flag.IntVar(&config.InfluxClients, "influx-clients", 0, "The number of concurrent InfluxDB clients")
 	flag.IntVar(&config.InfluxBufferSize, "influx-buffer-size", 0, "After this number of points the batch is flushed to InfluxDB")
-	flag.StringVar(&config.MongoUrl, "mongo-url", "", "MongoDB connection URL")
+	flag.StringVar(&config.MongoURL, "mongo-url", "", "MongoDB connection URL")
 	flag.StringVar(&config.MongoPemFile, "mongo-pem-file", "", "Path to a PEM file for secure connections to MongoDB")
 	flag.BoolVar(&config.MongoSkipVerify, "mongo-skip-verify", false, "Set to true to skip https certificate validator for MongoDB")
 	flag.StringVar(&config.MongoOpLogDatabaseName, "mongo-oplog-database-name", "", "Override the database name which contains the mongodb oplog")
@@ -486,19 +489,19 @@ func (config *configOptions) LoadPlugin() *configOptions {
 	}
 	p, err := plugin.Open(config.PluginPath)
 	if err != nil {
-		log.Panicf("Unable to load plugin <%s>: %s", config.PluginPath, err)
+		errorLog.Panicf("Unable to load plugin <%s>: %s", config.PluginPath, err)
 	}
 	for _, m := range config.Measurement {
 		if m.Symbol != "" {
 			f, err := p.Lookup(m.Symbol)
 			if err != nil {
-				log.Panicf("Unable to lookup symbol <%s> for plugin <%s>: %s", m.Symbol, config.PluginPath, err)
+				errorLog.Panicf("Unable to lookup symbol <%s> for plugin <%s>: %s", m.Symbol, config.PluginPath, err)
 			}
 			switch f.(type) {
 			case func(*mongofluxdplug.MongoDocument) ([]*mongofluxdplug.InfluxPoint, error):
 				m.plug = f.(func(*mongofluxdplug.MongoDocument) ([]*mongofluxdplug.InfluxPoint, error))
 			default:
-				log.Panicf("Plugin symbol <%s> must be typed %T", m.Symbol, m.plug)
+				errorLog.Panicf("Plugin symbol <%s> must be typed %T", m.Symbol, m.plug)
 			}
 		}
 	}
@@ -519,8 +522,8 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 		if _, err := toml.DecodeFile(config.ConfigFile, &tomlConfig); err != nil {
 			panic(err)
 		}
-		if config.InfluxUrl == "" {
-			config.InfluxUrl = tomlConfig.InfluxUrl
+		if config.InfluxURL == "" {
+			config.InfluxURL = tomlConfig.InfluxURL
 		}
 		if config.InfluxClients == 0 {
 			config.InfluxClients = tomlConfig.InfluxClients
@@ -545,8 +548,8 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 		if config.InfluxPemFile == "" {
 			config.InfluxPemFile = tomlConfig.InfluxPemFile
 		}
-		if config.MongoUrl == "" {
-			config.MongoUrl = tomlConfig.MongoUrl
+		if config.MongoURL == "" {
+			config.MongoURL = tomlConfig.MongoURL
 		}
 		if config.MongoPemFile == "" {
 			config.MongoPemFile = tomlConfig.MongoPemFile
@@ -608,8 +611,8 @@ func (config *configOptions) InfluxTLS() (*tls.Config, error) {
 }
 
 func (config *configOptions) SetDefaults() *configOptions {
-	if config.InfluxUrl == "" {
-		config.InfluxUrl = influxUrlDefault
+	if config.InfluxURL == "" {
+		config.InfluxURL = influxUrlDefault
 	}
 	if config.InfluxClients == 0 {
 		config.InfluxClients = influxClientsDefault
@@ -617,18 +620,21 @@ func (config *configOptions) SetDefaults() *configOptions {
 	if config.InfluxBufferSize == 0 {
 		config.InfluxBufferSize = influxBufferDefault
 	}
-	if config.MongoUrl == "" {
-		config.MongoUrl = mongoUrlDefault
+	if config.MongoURL == "" {
+		config.MongoURL = mongoUrlDefault
 	}
 	if config.ResumeName == "" {
 		config.ResumeName = resumeNameDefault
 	}
-	if config.MongoUrl != "" {
+	if config.MongoDialSettings.Timeout == -1 {
+		config.MongoDialSettings.Timeout = 15
+	}
+	if config.MongoURL != "" {
 		// if ssl=true is set on the connection string, remove the option
 		// from the connection string and enable TLS because the mgo
 		// driver does not support the option in the connection string
 		const queryDelim string = "?"
-		host_query := strings.SplitN(config.MongoUrl, queryDelim, 2)
+		host_query := strings.SplitN(config.MongoURL, queryDelim, 2)
 		if len(host_query) == 2 {
 			host, query := host_query[0], host_query[1]
 			r := regexp.MustCompile(`ssl=true&?|&ssl=true$`)
@@ -637,9 +643,9 @@ func (config *configOptions) SetDefaults() *configOptions {
 				// ssl detected
 				config.MongoDialSettings.Ssl = true
 				if qstr == "" {
-					config.MongoUrl = host
+					config.MongoURL = host
 				} else {
-					config.MongoUrl = strings.Join([]string{host, qstr}, queryDelim)
+					config.MongoURL = strings.Join([]string{host, qstr}, queryDelim)
 				}
 			}
 		}
@@ -648,6 +654,14 @@ func (config *configOptions) SetDefaults() *configOptions {
 }
 
 func (config *configOptions) DialMongo() (*mgo.Session, error) {
+	dialInfo, err := mgo.ParseURL(config.MongoURL)
+	if err != nil {
+		return nil, err
+	}
+	dialInfo.AppName = "mongofluxd"
+	dialInfo.Timeout = time.Duration(0)
+	dialInfo.ReadTimeout = time.Duration(0)
+	dialInfo.WriteTimeout = time.Duration(0)
 	ssl := config.MongoDialSettings.Ssl || config.MongoPemFile != ""
 	if ssl {
 		tlsConfig := &tls.Config{}
@@ -665,36 +679,39 @@ func (config *configOptions) DialMongo() (*mgo.Session, error) {
 			// Turn off validation
 			tlsConfig.InsecureSkipVerify = true
 		}
-		dialInfo, err := mgo.ParseURL(config.MongoUrl)
-		if err != nil {
-			return nil, err
-		} else {
-			dialInfo.Timeout = time.Duration(10) * time.Second
-			if config.MongoDialSettings.Timeout != -1 {
-				dialInfo.Timeout = time.Duration(config.MongoDialSettings.Timeout) * time.Second
+		dialInfo.DialServer = func(addr *mgo.ServerAddr) (net.Conn, error) {
+			conn, err := tls.Dial("tcp", addr.String(), tlsConfig)
+			if err != nil {
+				errorLog.Printf("Unable to dial MongoDB: %s", err)
 			}
-			dialInfo.DialServer = func(addr *mgo.ServerAddr) (net.Conn, error) {
-				conn, err := tls.Dial("tcp", addr.String(), tlsConfig)
-				if err != nil {
-					log.Printf("Unable to dial mongodb: %s\n", err)
-				}
-				return conn, err
-			}
-			session, err := mgo.DialWithInfo(dialInfo)
-			if err == nil {
-				session.SetSyncTimeout(1 * time.Minute)
-				session.SetSocketTimeout(1 * time.Minute)
-			}
-			return session, err
-		}
-	} else {
-		if config.MongoDialSettings.Timeout != -1 {
-			return mgo.DialWithTimeout(config.MongoUrl,
-				time.Duration(config.MongoDialSettings.Timeout)*time.Second)
-		} else {
-			return mgo.Dial(config.MongoUrl)
+			return conn, err
 		}
 	}
+	mongoOk := make(chan bool)
+	if config.MongoDialSettings.Timeout != 0 {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+		go func() {
+			deadline := time.Duration(config.MongoDialSettings.Timeout) * time.Second
+			connT := time.NewTicker(deadline)
+			defer connT.Stop()
+			select {
+			case <-mongoOk:
+				return
+			case <-sigs:
+				os.Exit(exitStatus)
+			case <-connT.C:
+				errorLog.Fatalf("Unable to connect to MongoDB using URL %s: timed out after %d seconds", config.MongoURL, config.MongoDialSettings.Timeout)
+			}
+		}()
+	}
+	session, err := mgo.DialWithInfo(dialInfo)
+	close(mongoOk)
+	if err == nil {
+		session.SetSyncTimeout(time.Duration(0))
+	}
+	return session, err
+
 }
 
 func GtmDefaultSettings() gtmSettings {
@@ -706,8 +723,6 @@ func GtmDefaultSettings() gtmSettings {
 }
 
 func main() {
-	log.SetPrefix("ERROR ")
-
 	config := &configOptions{
 		MongoDialSettings:    mongoDialSettings{Timeout: -1},
 		MongoSessionSettings: mongoSessionSettings{SocketTimeout: -1, SyncTimeout: -1},
@@ -726,7 +741,7 @@ func main() {
 
 	mongo, err := config.DialMongo()
 	if err != nil {
-		log.Panicf("Unable to connect to mongodb using URL %s: %s", config.MongoUrl, err)
+		errorLog.Panicf("Unable to connect to mongodb using URL %s: %s", config.MongoURL, err)
 	}
 	mongo.SetMode(mgo.Primary, true)
 	if config.Resume && config.ResumeWriteUnsafe {
@@ -782,11 +797,11 @@ func main() {
 	}
 	gtmBufferDuration, err := time.ParseDuration(config.GtmSettings.BufferDuration)
 	if err != nil {
-		log.Panicf("Unable to parse gtm buffer duration %s: %s", config.GtmSettings.BufferDuration, err)
+		errorLog.Panicf("Unable to parse gtm buffer duration %s: %s", config.GtmSettings.BufferDuration, err)
 	}
 	httpConfig := client.HTTPConfig{
 		UserAgent:          fmt.Sprintf("%s v%s", Name, Version),
-		Addr:               config.InfluxUrl,
+		Addr:               config.InfluxURL,
 		Username:           config.InfluxUser,
 		Password:           config.InfluxPassword,
 		InsecureSkipVerify: config.InfluxSkipVerify,
@@ -794,23 +809,30 @@ func main() {
 	if config.InfluxPemFile != "" {
 		tlsConfig, err := config.InfluxTLS()
 		if err != nil {
-			log.Panicf("Unable to configure TLS for InfluxDB: %s", err)
+			errorLog.Panicf("Unable to configure TLS for InfluxDB: %s", err)
 		}
 		httpConfig.TLSConfig = tlsConfig
 	}
 	influxClient, err := client.NewHTTPClient(httpConfig)
 	if err != nil {
-		log.Panicf("Unable to create InfluxDB client: %s", err)
+		errorLog.Panicf("Unable to create InfluxDB client: %s", err)
 	}
-	var directReadNs []string
+	var directReadNs, changeStreamNs []string
 	if config.DirectReads {
 		for _, m := range config.Measurement {
 			directReadNs = append(directReadNs, m.Namespace)
 		}
 	}
+	if config.ChangeStreams {
+		for _, m := range config.Measurement {
+			changeStreamNs = append(changeStreamNs, m.Namespace)
+		}
+	}
 	gtmCtx := gtm.Start(mongo, &gtm.Options{
 		After:               after,
+		Log:                 errorLog,
 		NamespaceFilter:     filter,
+		OpLogDisabled:       len(changeStreamNs) > 0,
 		OpLogDatabaseName:   oplogDatabaseName,
 		OpLogCollectionName: oplogCollectionName,
 		ChannelSize:         config.GtmSettings.ChannelSize,
@@ -819,21 +841,15 @@ func main() {
 		BufferDuration:      gtmBufferDuration,
 		BufferSize:          config.GtmSettings.BufferSize,
 		DirectReadNs:        directReadNs,
+		ChangeStreamNs:      changeStreamNs,
 	})
-	if config.DirectReads && config.ExitAfterDirectReads {
-		go func() {
-			gtmCtx.DirectReadWg.Wait()
-			stopC <- true
-		}()
-	}
-	exitStatus := 0
-	shutdownC := make(chan bool, config.InfluxClients)
 	var wg sync.WaitGroup
 	for i := 1; i <= config.InfluxClients; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			flusher := time.NewTicker(1 * time.Second)
+			defer flusher.Stop()
 			influx := &InfluxCtx{
 				c:        influxClient,
 				m:        make(map[string]client.BatchPoints),
@@ -843,24 +859,31 @@ func main() {
 				mongo:    mongo,
 			}
 			if err := influx.setupMeasurements(); err != nil {
-				log.Panicf("Configuration error: %s", err)
+				errorLog.Panicf("Configuration error: %s", err)
 			}
 			for {
 				select {
-				case <-shutdownC:
-					if err := influx.writeBatch(); err != nil {
-						exitStatus = 1
-						log.Println(err)
-					}
-					return
 				case <-flusher.C:
 					if err := influx.writeBatch(); err != nil {
 						gtmCtx.ErrC <- err
 					}
 				case err = <-gtmCtx.ErrC:
+					if err == nil {
+						break
+					}
 					exitStatus = 1
-					log.Println(err)
-				case op := <-gtmCtx.OpC:
+					errorLog.Println(err)
+				case op, open := <-gtmCtx.OpC:
+					if op == nil {
+						if !open {
+							if err := influx.writeBatch(); err != nil {
+								exitStatus = 1
+								errorLog.Println(err)
+							}
+							return
+						}
+						break
+					}
 					if err := influx.addPoint(op); err != nil {
 						gtmCtx.ErrC <- err
 					}
@@ -868,14 +891,15 @@ func main() {
 			}
 		}()
 	}
+	if config.DirectReads && config.ExitAfterDirectReads {
+		go func() {
+			gtmCtx.DirectReadWg.Wait()
+			gtmCtx.Stop()
+			wg.Wait()
+			stopC <- true
+		}()
+	}
 	<-stopC
-	if config.Verbose {
-		infoLog.Println("flushing in-flight points")
-	}
-	for i := 1; i <= config.InfluxClients; i++ {
-		shutdownC <- true
-	}
-	wg.Wait()
 	mongo.Close()
 	influxClient.Close()
 	os.Exit(exitStatus)
