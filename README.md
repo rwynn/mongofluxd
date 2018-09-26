@@ -81,6 +81,13 @@ fields = ["sales", "price"]
 retention = "RP1" 
 # override the measurement name which defaults to the name of the MongoDB collection
 measure = "sales"
+
+[[measurement]]
+namespace = "db.col"
+# You can specify a view of the namespace.  Direct reads will go through the view.
+# Change docs for db.col will also be routed through the view. The _id of the doc
+# that changed is used as the key into the view.
+view = "db.viewofcol"
 ```
 
 ### Some numbers

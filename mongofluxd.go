@@ -57,6 +57,7 @@ type gtmSettings struct {
 
 type measureSettings struct {
 	Namespace string
+	View      string
 	Timefield string
 	Retention string
 	Precision string
@@ -99,8 +100,14 @@ type configOptions struct {
 	PluginPath               string `toml:"plugin-path"`
 }
 
+type dbcol struct {
+	db string
+	col string
+}
+
 type InfluxMeasure struct {
 	ns        string
+	view      *dbcol
 	timefield string
 	retention string
 	precision string
@@ -134,6 +141,18 @@ func TimestampTime(ts bson.MongoTimestamp) time.Time {
 	return time.Unix(int64(ts>>32), 0).UTC()
 }
 
+func (im *InfluxMeasure) parseView(view string) error {
+	dbCol := strings.SplitN(view, ".", 2)
+	if len(dbCol) != 2 {
+		return fmt.Errorf("View namespace is invalid: %s", view)
+	}
+	im.view = &dbcol{
+		db: dbCol[0],
+		col: dbCol[1],
+	}
+	return nil
+}
+
 func (ctx *InfluxCtx) saveTs() (err error) {
 	if ctx.config.Resume && ctx.lastTs != 0 {
 		err = SaveTimestamp(ctx.mongo, ctx.lastTs, ctx.config.ResumeName)
@@ -156,6 +175,12 @@ func (ctx *InfluxCtx) setupMeasurements() error {
 				tags:      make(map[string]bool),
 				fields:    make(map[string]bool),
 			}
+			if ms.View != "" {
+				im.ns = ms.View
+				if err := im.parseView(ms.View); err != nil {
+					return err
+				}
+			}
 			if im.precision == "" {
 				im.precision = "s"
 			}
@@ -171,6 +196,9 @@ func (ctx *InfluxCtx) setupMeasurements() error {
 				}
 			}
 			ctx.measures[ms.Namespace] = im
+			if ms.View != "" {
+				ctx.measures[ms.View] = im
+			}
 		}
 		return nil
 	} else {
@@ -364,9 +392,33 @@ func (m *InfluxDataMap) loadData() error {
 
 }
 
+func (ctx *InfluxCtx) lookupInView(orig *gtm.Op, view *dbcol) (op *gtm.Op, err error) {
+	session := ctx.mongo.Copy()
+	defer session.Close()
+	col := session.DB(view.db).C(view.col)
+	doc := make(map[string]interface{})
+	err = col.FindId(orig.Id).One(doc)
+	op = &gtm.Op{
+		Id:        orig.Id,
+		Data:      doc,
+		Operation: orig.Operation,
+		Namespace: view.db + "." + view.col,
+		Source:    gtm.DirectQuerySource,
+		Timestamp: orig.Timestamp,
+	}
+	return
+}
+
 func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 	measure := ctx.measures[op.Namespace]
 	if measure != nil {
+		if measure.view != nil && op.IsSourceOplog() {
+			var err error
+			op, err = ctx.lookupInView(op, measure.view)
+			if err != nil {
+				return err
+			}
+		}
 		if err := ctx.setupDatabase(op); err != nil {
 			return err
 		}
@@ -445,6 +497,9 @@ func (config *configOptions) onlyMeasured() gtm.OpFilter {
 	measured := make(map[string]bool)
 	for _, m := range config.Measurement {
 		measured[m.Namespace] = true
+		if m.View != "" {
+			measured[m.View] = true
+		}
 	}
 	return func(op *gtm.Op) bool {
 		return measured[op.Namespace]
@@ -820,7 +875,11 @@ func main() {
 	var directReadNs, changeStreamNs []string
 	if config.DirectReads {
 		for _, m := range config.Measurement {
-			directReadNs = append(directReadNs, m.Namespace)
+			if m.View != "" {
+				directReadNs = append(directReadNs, m.View)
+			} else {
+				directReadNs = append(directReadNs, m.Namespace)
+			}
 		}
 	}
 	if config.ChangeStreams {
