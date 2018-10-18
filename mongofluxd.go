@@ -30,7 +30,7 @@ var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.6.0"
+	Version               = "0.6.1"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
