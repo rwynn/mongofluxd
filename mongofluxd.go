@@ -30,7 +30,7 @@ var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.6.1"
+	Version               = "0.6.2"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
@@ -715,8 +715,8 @@ func (config *configOptions) DialMongo() (*mgo.Session, error) {
 	}
 	dialInfo.AppName = "mongofluxd"
 	dialInfo.Timeout = time.Duration(0)
-	dialInfo.ReadTimeout = time.Duration(0)
-	dialInfo.WriteTimeout = time.Duration(0)
+	dialInfo.ReadTimeout = time.Duration(7)
+	dialInfo.WriteTimeout = time.Duration(7)
 	ssl := config.MongoDialSettings.Ssl || config.MongoPemFile != ""
 	if ssl {
 		tlsConfig := &tls.Config{}
@@ -763,7 +763,7 @@ func (config *configOptions) DialMongo() (*mgo.Session, error) {
 	session, err := mgo.DialWithInfo(dialInfo)
 	close(mongoOk)
 	if err == nil {
-		session.SetSyncTimeout(time.Duration(0))
+		session.SetSyncTimeout(time.Duration(7))
 	}
 	return session, err
 
