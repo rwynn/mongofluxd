@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/signal"
 	"plugin"
-	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,7 +29,7 @@ var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.6.2"
+	Version               = "0.7.0"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
@@ -42,11 +41,6 @@ const (
 type mongoDialSettings struct {
 	Timeout int
 	Ssl     bool
-}
-
-type mongoSessionSettings struct {
-	SocketTimeout int `toml:"socket-timeout"`
-	SyncTimeout   int `toml:"sync-timeout"`
 }
 
 type gtmSettings struct {
@@ -69,15 +63,14 @@ type measureSettings struct {
 }
 
 type configOptions struct {
-	MongoURL                 string               `toml:"mongo-url"`
-	MongoPemFile             string               `toml:"mongo-pem-file"`
-	MongoSkipVerify          bool                 `toml:"mongo-skip-verify"`
-	MongoOpLogDatabaseName   string               `toml:"mongo-oplog-database-name"`
-	MongoOpLogCollectionName string               `toml:"mongo-oplog-collection-name"`
-	MongoDialSettings        mongoDialSettings    `toml:"mongo-dial-settings"`
-	MongoSessionSettings     mongoSessionSettings `toml:"mongo-session-settings"`
-	GtmSettings              gtmSettings          `toml:"gtm-settings"`
-	ResumeName               string               `toml:"resume-name"`
+	MongoURL                 string            `toml:"mongo-url"`
+	MongoPemFile             string            `toml:"mongo-pem-file"`
+	MongoSkipVerify          bool              `toml:"mongo-skip-verify"`
+	MongoOpLogDatabaseName   string            `toml:"mongo-oplog-database-name"`
+	MongoOpLogCollectionName string            `toml:"mongo-oplog-collection-name"`
+	MongoDialSettings        mongoDialSettings `toml:"mongo-dial-settings"`
+	GtmSettings              gtmSettings       `toml:"gtm-settings"`
+	ResumeName               string            `toml:"resume-name"`
 	Version                  bool
 	Verbose                  bool
 	Resume                   bool
@@ -101,7 +94,7 @@ type configOptions struct {
 }
 
 type dbcol struct {
-	db string
+	db  string
 	col string
 }
 
@@ -147,7 +140,7 @@ func (im *InfluxMeasure) parseView(view string) error {
 		return fmt.Errorf("View namespace is invalid: %s", view)
 	}
 	im.view = &dbcol{
-		db: dbCol[0],
+		db:  dbCol[0],
 		col: dbCol[1],
 	}
 	return nil
@@ -569,10 +562,9 @@ func (config *configOptions) LoadPlugin() *configOptions {
 func (config *configOptions) LoadConfigFile() *configOptions {
 	if config.ConfigFile != "" {
 		var tomlConfig configOptions = configOptions{
-			MongoDialSettings:    mongoDialSettings{Timeout: -1},
-			MongoSessionSettings: mongoSessionSettings{SocketTimeout: -1, SyncTimeout: -1},
-			GtmSettings:          GtmDefaultSettings(),
-			InfluxAutoCreateDB:   true,
+			MongoDialSettings:  mongoDialSettings{Timeout: -1},
+			GtmSettings:        GtmDefaultSettings(),
+			InfluxAutoCreateDB: true,
 		}
 		if _, err := toml.DecodeFile(config.ConfigFile, &tomlConfig); err != nil {
 			panic(err)
@@ -646,7 +638,6 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 			config.PluginPath = tomlConfig.PluginPath
 		}
 		config.MongoDialSettings = tomlConfig.MongoDialSettings
-		config.MongoSessionSettings = tomlConfig.MongoSessionSettings
 		config.GtmSettings = tomlConfig.GtmSettings
 		config.Measurement = tomlConfig.Measurement
 	}
@@ -681,31 +672,28 @@ func (config *configOptions) SetDefaults() *configOptions {
 	if config.ResumeName == "" {
 		config.ResumeName = resumeNameDefault
 	}
-	if config.MongoDialSettings.Timeout == -1 {
-		config.MongoDialSettings.Timeout = 15
-	}
-	if config.MongoURL != "" {
-		// if ssl=true is set on the connection string, remove the option
-		// from the connection string and enable TLS because the mgo
-		// driver does not support the option in the connection string
-		const queryDelim string = "?"
-		host_query := strings.SplitN(config.MongoURL, queryDelim, 2)
-		if len(host_query) == 2 {
-			host, query := host_query[0], host_query[1]
-			r := regexp.MustCompile(`ssl=true&?|&ssl=true$`)
-			qstr := r.ReplaceAllString(query, "")
-			if qstr != query {
-				// ssl detected
-				config.MongoDialSettings.Ssl = true
-				if qstr == "" {
-					config.MongoURL = host
-				} else {
-					config.MongoURL = strings.Join([]string{host, qstr}, queryDelim)
-				}
-			}
-		}
+	if config.MongoDialSettings.Timeout < 0 {
+		config.MongoDialSettings.Timeout = 30
 	}
 	return config
+}
+
+func (config *configOptions) timeoutConnection(mongoOk chan bool) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	defer signal.Stop(sigs)
+	deadline := time.Duration(config.MongoDialSettings.Timeout) * time.Second
+	connT := time.NewTicker(deadline)
+	defer connT.Stop()
+	select {
+	case <-mongoOk:
+		return
+	case <-sigs:
+		os.Exit(exitStatus)
+	case <-connT.C:
+		errorLog.Fatalf("Unable to connect to MongoDB using URL %s: timed out after %d seconds",
+			config.MongoURL, config.MongoDialSettings.Timeout)
+	}
 }
 
 func (config *configOptions) DialMongo() (*mgo.Session, error) {
@@ -713,10 +701,13 @@ func (config *configOptions) DialMongo() (*mgo.Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	timeout := time.Duration(config.MongoDialSettings.Timeout) * time.Second
 	dialInfo.AppName = "mongofluxd"
 	dialInfo.Timeout = time.Duration(0)
-	dialInfo.ReadTimeout = time.Duration(7)
-	dialInfo.WriteTimeout = time.Duration(7)
+	if timeout > 0 {
+		dialInfo.ReadTimeout = timeout
+		dialInfo.WriteTimeout = timeout
+	}
 	ssl := config.MongoDialSettings.Ssl || config.MongoPemFile != ""
 	if ssl {
 		tlsConfig := &tls.Config{}
@@ -743,27 +734,15 @@ func (config *configOptions) DialMongo() (*mgo.Session, error) {
 		}
 	}
 	mongoOk := make(chan bool)
-	if config.MongoDialSettings.Timeout != 0 {
-		sigs := make(chan os.Signal, 1)
-		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-		go func() {
-			deadline := time.Duration(config.MongoDialSettings.Timeout) * time.Second
-			connT := time.NewTicker(deadline)
-			defer connT.Stop()
-			select {
-			case <-mongoOk:
-				return
-			case <-sigs:
-				os.Exit(exitStatus)
-			case <-connT.C:
-				errorLog.Fatalf("Unable to connect to MongoDB using URL %s: timed out after %d seconds", config.MongoURL, config.MongoDialSettings.Timeout)
-			}
-		}()
+	if timeout > 0 {
+		go config.timeoutConnection(mongoOk)
 	}
 	session, err := mgo.DialWithInfo(dialInfo)
 	close(mongoOk)
 	if err == nil {
-		session.SetSyncTimeout(time.Duration(7))
+		if timeout > 0 {
+			session.SetSyncTimeout(timeout)
+		}
 	}
 	return session, err
 
@@ -779,9 +758,8 @@ func GtmDefaultSettings() gtmSettings {
 
 func main() {
 	config := &configOptions{
-		MongoDialSettings:    mongoDialSettings{Timeout: -1},
-		MongoSessionSettings: mongoSessionSettings{SocketTimeout: -1, SyncTimeout: -1},
-		GtmSettings:          GtmDefaultSettings(),
+		MongoDialSettings: mongoDialSettings{Timeout: -1},
+		GtmSettings:       GtmDefaultSettings(),
 	}
 	config.ParseCommandLineFlags()
 	if config.Version {
@@ -793,22 +771,14 @@ func main() {
 	sigs := make(chan os.Signal, 1)
 	stopC := make(chan bool, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	defer signal.Stop(sigs)
 
 	mongo, err := config.DialMongo()
 	if err != nil {
 		errorLog.Panicf("Unable to connect to mongodb using URL %s: %s", config.MongoURL, err)
 	}
-	mongo.SetMode(mgo.Primary, true)
 	if config.Resume && config.ResumeWriteUnsafe {
 		mongo.SetSafe(nil)
-	}
-	if config.MongoSessionSettings.SocketTimeout != -1 {
-		timeOut := time.Duration(config.MongoSessionSettings.SocketTimeout) * time.Second
-		mongo.SetSocketTimeout(timeOut)
-	}
-	if config.MongoSessionSettings.SyncTimeout != -1 {
-		timeOut := time.Duration(config.MongoSessionSettings.SyncTimeout) * time.Second
-		mongo.SetSyncTimeout(timeOut)
 	}
 
 	go func() {
@@ -950,12 +920,15 @@ func main() {
 			}
 		}()
 	}
-	if config.DirectReads && config.ExitAfterDirectReads {
+	if config.DirectReads {
 		go func() {
 			gtmCtx.DirectReadWg.Wait()
-			gtmCtx.Stop()
-			wg.Wait()
-			stopC <- true
+			infoLog.Println("Direct reads completed")
+			if config.ExitAfterDirectReads {
+				gtmCtx.Stop()
+				wg.Wait()
+				stopC <- true
+			}
 		}()
 	}
 	<-stopC

@@ -1,12 +1,15 @@
 # mongofluxd
 Real time sync from MongoDB into InfluxDB
 
-
 ### Installation
 
-Download the latest [release](https://github.com/rwynn/mongofluxd/releases) or install with go get
+Download the latest [release](https://github.com/rwynn/mongofluxd/releases) or install with golang 1.11 and above
 
-	go get -v github.com/rwynn/mongofluxd
+	# clone the repo outside your $GOPATH
+	git clone https://github.com/rwynn/mongofluxd.git
+	cd mongofluxd
+	# install binary to $GOPATH/bin/mongofluxd
+	go install
 
 ### Usage
 
@@ -216,8 +219,14 @@ func MyPointMapper(input *mongofluxdplug.MongoDocument) (output []*mongofluxdplu
 	return output, nil
 }
 ```
-The plugin can be built for go 1.8 and above using the go build command
+To build a plugin you must use golang 1.11 and above and ensure you run the `go build` command with
+the mongofluxd `go.mod` file in the current directory. This is to ensure your plugin dependencies use 
+the exact same source code as mongofluxd.
 
+	# clone the repo outside your $GOPATH
+	git clone https://github.com/rwynn/mongofluxd.git
+	cd mongofluxd
+	# edit a file myplugin.go which is your plugin
 	go build -buildmode=plugin -o myplugin.so myplugin.go
 
 The public plugin function, or symbol, can then be assigned to a measurement in the config file
