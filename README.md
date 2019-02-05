@@ -139,7 +139,7 @@ The mapping function must be of the form:
 
 The following example plugin maps a single MongoDB document to multiple Points in InfluxDB:
 
-```
+```go
 package main
 
 import (
