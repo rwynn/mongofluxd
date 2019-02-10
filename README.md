@@ -83,6 +83,8 @@ fields = ["sales", "price"]
 retention = "RP1" 
 # override the measurement name which defaults to the name of the MongoDB collection
 measure = "sales"
+# override the influx database name which default to the name of the MongoDB database
+database = "salesdb"
 
 [[measurement]]
 namespace = "db.col"

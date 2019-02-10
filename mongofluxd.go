@@ -29,7 +29,7 @@ var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.7.1"
+	Version               = "0.8.0"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
@@ -56,6 +56,7 @@ type measureSettings struct {
 	Retention string
 	Precision string
 	Measure   string
+	Database  string
 	Symbol    string
 	Tags      []string
 	Fields    []string
@@ -105,6 +106,7 @@ type InfluxMeasure struct {
 	retention string
 	precision string
 	measure   string
+	database  string
 	tags      map[string]bool
 	fields    map[string]bool
 	plug      func(*mongofluxdplug.MongoDocument) ([]*mongofluxdplug.InfluxPoint, error)
@@ -164,6 +166,7 @@ func (ctx *InfluxCtx) setupMeasurements() error {
 				retention: ms.Retention,
 				precision: ms.Precision,
 				measure:   ms.Measure,
+				database:  ms.Database,
 				plug:      ms.plug,
 				tags:      make(map[string]bool),
 				fields:    make(map[string]bool),
@@ -173,6 +176,12 @@ func (ctx *InfluxCtx) setupMeasurements() error {
 				if err := im.parseView(ms.View); err != nil {
 					return err
 				}
+			}
+			if im.database == "" {
+				im.database = strings.SplitN(im.ns, ".", 2)[0]
+			}
+			if im.measure == "" {
+				im.measure = strings.SplitN(im.ns, ".", 2)[1]
 			}
 			if im.precision == "" {
 				im.precision = "s"
@@ -218,18 +227,19 @@ func (ctx *InfluxCtx) createDatabase(db string) error {
 }
 
 func (ctx *InfluxCtx) setupDatabase(op *gtm.Op) error {
-	db, ns := op.GetDatabase(), op.Namespace
+	ns := op.Namespace
 	if _, found := ctx.m[ns]; found == false {
+		measure := ctx.measures[ns]
 		bp, err := client.NewBatchPoints(client.BatchPointsConfig{
-			Database:        db,
-			RetentionPolicy: ctx.measures[ns].retention,
-			Precision:       ctx.measures[ns].precision,
+			Database:        measure.database,
+			RetentionPolicy: measure.retention,
+			Precision:       measure.precision,
 		})
 		if err != nil {
 			return err
 		}
 		ctx.m[ns] = bp
-		if err := ctx.createDatabase(db); err != nil {
+		if err := ctx.createDatabase(measure.database); err != nil {
 			return err
 		}
 	}
@@ -311,14 +321,6 @@ func (m *InfluxDataMap) flatmap(prefix string, e map[string]interface{}) map[str
 
 func (m *InfluxDataMap) unsupportedType(op *gtm.Op, k string, v interface{}, kind string) {
 	errorLog.Printf("Unsupported type %T for %s %s in namespace %s\n", v, kind, k, op.Namespace)
-}
-
-func (m *InfluxDataMap) loadName() {
-	if m.measure.measure != "" {
-		m.name = m.measure.measure
-	} else {
-		m.name = m.op.GetCollection()
-	}
 }
 
 func (m *InfluxDataMap) loadKV(k string, v interface{}) {
@@ -419,8 +421,8 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 		mapper := &InfluxDataMap{
 			op:      op,
 			measure: measure,
+			name:    measure.measure,
 		}
-		mapper.loadName()
 		if measure.plug != nil {
 			points, err := measure.plug(&mongofluxdplug.MongoDocument{
 				Data:       op.Data,
