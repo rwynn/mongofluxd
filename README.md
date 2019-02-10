@@ -13,16 +13,15 @@ Download the latest [release](https://github.com/rwynn/mongofluxd/releases) or i
 
 ### Usage
 
-Since mongofluxd uses the mongodb oplog it is required that MongoDB is configured to produce an oplog.
+Mongofluxd uses the MongoDB [oplog](https://docs.mongodb.com/manual/core/replica-set-oplog/) as an event source. 
 
-This can be ensured by doing one of the following:
-+ Setting up [replica sets](http://docs.mongodb.org/manual/tutorial/deploy-replica-set/)
-+ Passing --master to the mongod process
-+ Setting the following in /etc/mongod.conf
+You will need to ensure that MongoDB is configured to produce an oplog by 
+[deploying a replica set](http://docs.mongodb.org/manual/tutorial/deploy-replica-set/).
 
-	```
-	master = true
-	```
+If you haven't already done so, follow the 5 step 
+[procedure](https://docs.mongodb.com/manual/tutorial/deploy-replica-set/#procedure) 
+to initiate and validate your replica set. For local testing your replica set may contain a 
+[single member](https://docs.mongodb.com/manual/tutorial/convert-standalone-to-replica-set/).
 
 Run mongofluxd with the -f option to point to a configuration file.  The configuration format is toml.
 
