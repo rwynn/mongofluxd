@@ -65,8 +65,6 @@ github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMo
 github.com/getkin/kin-openapi v0.1.0/go.mod h1:+0ZtELZf+SlWH8ZdA/IeFb3L/PKOKJx8eGxAlUZ/sOU=
 github.com/ghodss/yaml v1.0.0/go.mod h1:4dBDuWmgqj2HViK6kFavaiC9ZROes6MMH2rRYeMEF04=
 github.com/gliderlabs/ssh v0.1.1/go.mod h1:U7qILu1NlMHj9FlMhZLlkCdDnU1DBEAqr0aevW3Awn0=
-github.com/globalsign/mgo v0.0.0-20181015135952-eeefdecb41b8 h1:DujepqpGd1hyOd7aW59XpK7Qymp8iy83xq74fLr21is=
-github.com/globalsign/mgo v0.0.0-20181015135952-eeefdecb41b8/go.mod h1:xkRDCp4j0OGD1HRkm4kmhM+pmpv3AKq5SU7GMg4oO/Q=
 github.com/glycerine/go-unsnap-stream v0.0.0-20180323001048-9f0cb55181dd/go.mod h1:/20jfyN9Y5QPEAprSgKAUr+glWDY39ZiUEAYOEv5dsE=
 github.com/glycerine/goconvey v0.0.0-20180728074245-46e3a41ad493/go.mod h1:Ogl1Tioa0aV7gstGFO7KhffUsb9M4ydbEbbxpcEDc24=
 github.com/go-ldap/ldap v2.5.1+incompatible/go.mod h1:qfd9rJvER9Q0/D/Sqn1DfHRoBp40uXYvFoEVrNEPqRc=
@@ -199,12 +197,10 @@ github.com/prometheus/client_model v0.0.0-20180712105110-5c3871d89910/go.mod h1:
 github.com/prometheus/common v0.0.0-20180801064454-c7de2306084e/go.mod h1:daVV7qP5qjZbuso7PdcryaAu0sAZbrN9i7WWcTMWvro=
 github.com/prometheus/common v0.0.0-20181020173914-7e9e6cabbd39/go.mod h1:daVV7qP5qjZbuso7PdcryaAu0sAZbrN9i7WWcTMWvro=
 github.com/prometheus/procfs v0.0.0-20181005140218-185b4288413d/go.mod h1:c3At6R/oaqEKCNdg8wHV1ftS6bRYblBhIjjI8uT2IGk=
-github.com/rwynn/gtm v0.0.0-20190131014030-4d96eedfb073 h1:OgMl+/XpaQzW5c38u59HAlNgMSt+0MWrv7joLRI47nc=
-github.com/rwynn/gtm v0.0.0-20190131014030-4d96eedfb073/go.mod h1:LYXeTMjbA7l9k9oEM+NUBuu0BgvNrD5nQuo8seLsar0=
-github.com/rwynn/mgo v0.0.0-20190130173337-9b1257fb3190 h1:trPv91MYUdV6w+TaBJsudBfJOBRozGvneuDZVmEc/QI=
-github.com/rwynn/mgo v0.0.0-20190130173337-9b1257fb3190/go.mod h1:OQBK0ebL25cW31topLSUPIWIrSesue7+zTa/haAXccQ=
-github.com/rwynn/mgo v0.0.0-20190203195949-55e8fd85e7e2 h1:+QMMf2dZav3oviMURjgWnNyppc14490oMi43Hd/PffA=
-github.com/rwynn/mgo v0.0.0-20190203195949-55e8fd85e7e2/go.mod h1:OQBK0ebL25cW31topLSUPIWIrSesue7+zTa/haAXccQ=
+github.com/rwynn/gtm v0.0.0-20190328011341-2e5339752e18 h1:6S/LARqsU7QTiFu5GUzcvCcKa/1k8OUjURjsWuN8kS0=
+github.com/rwynn/gtm v0.0.0-20190328011341-2e5339752e18/go.mod h1:LYXeTMjbA7l9k9oEM+NUBuu0BgvNrD5nQuo8seLsar0=
+github.com/rwynn/mgo v0.0.0-20190318130802-4743670bc61d h1:fuuv7D/fC+W9L65/v0U1WbPFFDcLfCQbOr31+BE04t4=
+github.com/rwynn/mgo v0.0.0-20190318130802-4743670bc61d/go.mod h1:A7shUp7a6hZnGy4eE0930GgrQD7Q1hSry97MbwFZupU=
 github.com/ryanuber/go-glob v0.0.0-20170128012129-256dc444b735/go.mod h1:807d1WSdnB0XRJzKNil9Om6lcp/3a0v4qIHxIXzX/Yc=
 github.com/satori/go.uuid v1.2.0/go.mod h1:dA0hQrYB0VpLJoorglMZABFdXlWrHn1NEOzdhQKdks0=
 github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529/go.mod h1:DxrIzT+xaE7yg65j358z/aeFdxmN0P9QXhEzd20vsDc=
