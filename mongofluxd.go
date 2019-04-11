@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"text/template"
 	"time"
 )
 
@@ -29,7 +31,7 @@ var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.8.1"
+	Version               = "0.9.0"
 	mongoUrlDefault       = "localhost"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
@@ -100,16 +102,17 @@ type dbcol struct {
 }
 
 type InfluxMeasure struct {
-	ns        string
-	view      *dbcol
-	timefield string
-	retention string
-	precision string
-	measure   string
-	database  string
-	tags      map[string]bool
-	fields    map[string]bool
-	plug      func(*mongofluxdplug.MongoDocument) ([]*mongofluxdplug.InfluxPoint, error)
+	ns         string
+	view       *dbcol
+	timefield  string
+	retention  string
+	precision  string
+	measure    string
+	measureTpl *template.Template
+	database   string
+	tags       map[string]bool
+	fields     map[string]bool
+	plug       func(*mongofluxdplug.MongoDocument) ([]*mongofluxdplug.InfluxPoint, error)
 }
 
 type InfluxCtx struct {
@@ -130,6 +133,7 @@ type InfluxDataMap struct {
 	measure   *InfluxMeasure
 	t         time.Time
 	name      string
+	nameTpl   *template.Template
 }
 
 func TimestampTime(ts bson.MongoTimestamp) time.Time {
@@ -182,6 +186,15 @@ func (ctx *InfluxCtx) setupMeasurements() error {
 			}
 			if im.measure == "" {
 				im.measure = strings.SplitN(im.ns, ".", 2)[1]
+			} else {
+				if strings.Contains(im.measure, "{{") {
+					// detect and create go text/template for measure name
+					tpl, err := template.New(im.ns).Parse(im.measure)
+					if err != nil {
+						return err
+					}
+					im.measureTpl = tpl
+				}
 			}
 			if im.precision == "" {
 				im.precision = "s"
@@ -339,6 +352,21 @@ func (m *InfluxDataMap) loadKV(k string, v interface{}) {
 	}
 }
 
+func (m *InfluxDataMap) resolveName(tags map[string]string, fields map[string]interface{}) error {
+	if m.nameTpl != nil {
+		var b bytes.Buffer
+		env := map[string]interface{}{
+			"Tags":   tags,
+			"Fields": fields,
+		}
+		if err := m.nameTpl.Execute(&b, env); err != nil {
+			return err
+		}
+		m.name = b.String()
+	}
+	return nil
+}
+
 func (m *InfluxDataMap) loadData() error {
 	m.tags = make(map[string]string)
 	m.fields = make(map[string]interface{})
@@ -422,6 +450,7 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 			op:      op,
 			measure: measure,
 			name:    measure.measure,
+			nameTpl: measure.measureTpl,
 		}
 		if measure.plug != nil {
 			points, err := measure.plug(&mongofluxdplug.MongoDocument{
@@ -435,6 +464,9 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 				return err
 			}
 			for _, pt := range points {
+				if err := mapper.resolveName(pt.Tags, pt.Fields); err != nil {
+					return err
+				}
 				pt, err := client.NewPoint(mapper.name, pt.Tags, pt.Fields, pt.Timestamp)
 				if err != nil {
 					return err
@@ -443,6 +475,9 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 			}
 		} else {
 			if err := mapper.loadData(); err != nil {
+				return err
+			}
+			if err := mapper.resolveName(mapper.tags, mapper.fields); err != nil {
 				return err
 			}
 			pt, err := client.NewPoint(mapper.name, mapper.tags, mapper.fields, mapper.t)
