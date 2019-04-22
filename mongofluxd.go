@@ -792,6 +792,10 @@ func main() {
 	}
 	config.LoadConfigFile().SetDefaults().LoadPlugin()
 
+	if len(config.Measurement) == 0 {
+		errorLog.Panicf("at least one measurement is required")
+	}
+
 	sigs := make(chan os.Signal, 1)
 	stopC := make(chan bool, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
