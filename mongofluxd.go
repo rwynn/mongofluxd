@@ -550,6 +550,7 @@ func (config *configOptions) ParseCommandLineFlags() *configOptions {
 	flag.StringVar(&config.ResumeName, "resume-name", "", "Name under which to load/store the resume state. Defaults to 'default'")
 	flag.StringVar(&config.PluginPath, "plugin-path", "", "The file path to a .so file plugin")
 	flag.BoolVar(&config.DirectReads, "direct-reads", false, "Set to true to read directly from MongoDB collections")
+	flag.BoolVar(&config.ChangeStreams, "change-streams", false, "Set to true to enable change streams for MongoDB 3.6+")
 	flag.BoolVar(&config.ExitAfterDirectReads, "exit-after-direct-reads", false, "Set to true to exit after direct reads are complete")
 	flag.Parse()
 	return config
@@ -638,6 +639,9 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 		}
 		if !config.DirectReads && tomlConfig.DirectReads {
 			config.DirectReads = true
+		}
+		if !config.ChangeStreams && tomlConfig.ChangeStreams {
+			config.ChangeStreams = true
 		}
 		if !config.ExitAfterDirectReads && tomlConfig.ExitAfterDirectReads {
 			config.ExitAfterDirectReads = true
@@ -881,7 +885,7 @@ func main() {
 	}
 	gtmCtx := gtm.Start(mongoClient, &gtm.Options{
 		After:               after,
-		Log:                 errorLog,
+		Log:                 infoLog,
 		NamespaceFilter:     filter,
 		OpLogDisabled:       len(changeStreamNs) > 0,
 		OpLogDatabaseName:   config.MongoOpLogDatabaseName,
@@ -950,7 +954,6 @@ func main() {
 				saveTimestampFromReplStatus(mongoClient, config)
 			}
 			if config.ExitAfterDirectReads {
-				infoLog.Println("Stopping all workers")
 				gtmCtx.Stop()
 				wg.Wait()
 				stopC <- true
@@ -958,6 +961,8 @@ func main() {
 		}()
 	}
 	<-stopC
+	infoLog.Println("Stopping all workers and shutting down")
+	gtmCtx.Stop()
 	mongoClient.Disconnect(context.Background())
 	influxClient.Close()
 	os.Exit(exitStatus)
