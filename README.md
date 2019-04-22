@@ -34,10 +34,9 @@ influx-auto-create-db = true
 #influx-pem-file = "/path/to/cert.pem"
 influx-clients = 10
 
-mongo-url = "localhost"
+mongo-url = "mongodb://localhost:27017"
 # use the default MongoDB port on localhost
-mongo-skip-verify = true
-#mongo-pem-file = "/path/to/cert.pem"
+# see https://github.com/mongodb/mongo-go-driver/blob/master/x/network/connstring/connstring.go for all options
 
 replay = false
 # process all events from the beginning of the oplog
@@ -83,6 +82,8 @@ fields = ["sales", "price"]
 retention = "RP1" 
 # override the measurement name which defaults to the name of the MongoDB collection
 measure = "sales"
+# the measurement name can be calculated from the Fields or Tags in a golang template
+# measure = "{{.Tags.category}}_{{.Fields.price}}"
 # override the influx database name which default to the name of the MongoDB database
 database = "salesdb"
 
@@ -145,7 +146,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/rwynn/gtm"
 	"github.com/rwynn/mongofluxd/mongofluxdplug"
 	"time"
 )
@@ -227,7 +227,7 @@ the exact same source code as mongofluxd.
 	# clone the repo outside your $GOPATH
 	git clone https://github.com/rwynn/mongofluxd.git
 	cd mongofluxd
-	# edit a file myplugin.go which is your plugin
+	# add and edit a file myplugin.go which is your plugin
 	go build -buildmode=plugin -o myplugin.so myplugin.go
 
 The public plugin function, or symbol, can then be assigned to a measurement in the config file

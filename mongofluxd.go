@@ -2,22 +2,27 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
-	"github.com/globalsign/mgo"
-	"github.com/globalsign/mgo/bson"
 	"github.com/influxdata/influxdb/client/v2"
 	"github.com/rwynn/gtm"
 	"github.com/rwynn/mongofluxd/mongofluxdplug"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsontype"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 	"io/ioutil"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"plugin"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,19 +36,14 @@ var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "0.9.0"
-	mongoUrlDefault       = "localhost"
+	Version               = "1.0.0"
+	mongoUrlDefault       = "mongodb://localhost:27017"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
 	influxBufferDefault   = 1000
 	resumeNameDefault     = "default"
 	gtmChannelSizeDefault = 512
 )
-
-type mongoDialSettings struct {
-	Timeout int
-	Ssl     bool
-}
 
 type gtmSettings struct {
 	ChannelSize    int    `toml:"channel-size"`
@@ -66,14 +66,11 @@ type measureSettings struct {
 }
 
 type configOptions struct {
-	MongoURL                 string            `toml:"mongo-url"`
-	MongoPemFile             string            `toml:"mongo-pem-file"`
-	MongoSkipVerify          bool              `toml:"mongo-skip-verify"`
-	MongoOpLogDatabaseName   string            `toml:"mongo-oplog-database-name"`
-	MongoOpLogCollectionName string            `toml:"mongo-oplog-collection-name"`
-	MongoDialSettings        mongoDialSettings `toml:"mongo-dial-settings"`
-	GtmSettings              gtmSettings       `toml:"gtm-settings"`
-	ResumeName               string            `toml:"resume-name"`
+	MongoURL                 string      `toml:"mongo-url"`
+	MongoOpLogDatabaseName   string      `toml:"mongo-oplog-database-name"`
+	MongoOpLogCollectionName string      `toml:"mongo-oplog-collection-name"`
+	GtmSettings              gtmSettings `toml:"gtm-settings"`
+	ResumeName               string      `toml:"resume-name"`
 	Version                  bool
 	Verbose                  bool
 	Resume                   bool
@@ -121,8 +118,8 @@ type InfluxCtx struct {
 	dbs      map[string]bool
 	measures map[string]*InfluxMeasure
 	config   *configOptions
-	lastTs   bson.MongoTimestamp
-	mongo    *mgo.Session
+	lastTs   primitive.Timestamp
+	client   *mongo.Client
 }
 
 type InfluxDataMap struct {
@@ -136,8 +133,8 @@ type InfluxDataMap struct {
 	nameTpl   *template.Template
 }
 
-func TimestampTime(ts bson.MongoTimestamp) time.Time {
-	return time.Unix(int64(ts>>32), 0).UTC()
+func TimestampTime(ts primitive.Timestamp) time.Time {
+	return time.Unix(int64(ts.T), 0).UTC()
 }
 
 func (im *InfluxMeasure) parseView(view string) error {
@@ -153,9 +150,9 @@ func (im *InfluxMeasure) parseView(view string) error {
 }
 
 func (ctx *InfluxCtx) saveTs() (err error) {
-	if ctx.config.Resume && ctx.lastTs != 0 {
-		err = SaveTimestamp(ctx.mongo, ctx.lastTs, ctx.config.ResumeName)
-		ctx.lastTs = bson.MongoTimestamp(0)
+	if ctx.config.Resume && ctx.lastTs.T > 0 {
+		err = saveTimestamp(ctx.client, ctx.lastTs, ctx.config)
+		ctx.lastTs = primitive.Timestamp{}
 	}
 	return
 }
@@ -318,11 +315,6 @@ func (m *InfluxDataMap) flatmap(prefix string, e map[string]interface{}) map[str
 			for nk, nv := range nm {
 				o[prefix+k+"."+nk] = nv
 			}
-		case gtm.OpLogEntry:
-			nm := m.flatmap("", child)
-			for nk, nv := range nm {
-				o[prefix+k+"."+nk] = nv
-			}
 		default:
 			if m.isfieldtype(v) {
 				o[prefix+k] = v
@@ -384,17 +376,12 @@ func (m *InfluxDataMap) loadData() error {
 				m.t = vt.UTC()
 				m.timefield = true
 			}
-		case bson.MongoTimestamp:
+		case primitive.Timestamp:
 			if m.measure.timefield == k {
 				m.t = TimestampTime(vt)
 				m.timefield = true
 			}
 		case map[string]interface{}:
-			flat := m.flatmap(k+".", vt)
-			for fk, fv := range flat {
-				m.loadKV(fk, fv)
-			}
-		case gtm.OpLogEntry:
 			flat := m.flatmap(k+".", vt)
 			for fk, fv := range flat {
 				m.loadKV(fk, fv)
@@ -416,18 +403,22 @@ func (m *InfluxDataMap) loadData() error {
 }
 
 func (ctx *InfluxCtx) lookupInView(orig *gtm.Op, view *dbcol) (op *gtm.Op, err error) {
-	session := ctx.mongo.Copy()
-	defer session.Close()
-	col := session.DB(view.db).C(view.col)
-	doc := make(map[string]interface{})
-	err = col.FindId(orig.Id).One(doc)
-	op = &gtm.Op{
-		Id:        orig.Id,
-		Data:      doc,
-		Operation: orig.Operation,
-		Namespace: view.db + "." + view.col,
-		Source:    gtm.DirectQuerySource,
-		Timestamp: orig.Timestamp,
+	col := ctx.client.Database(view.db).Collection(view.col)
+	result := col.FindOne(context.Background(), bson.M{
+		"_id": orig.Id,
+	})
+	if err = result.Err(); err == nil {
+		doc := make(map[string]interface{})
+		if err = result.Decode(&doc); err == nil {
+			op = &gtm.Op{
+				Id:        orig.Id,
+				Data:      doc,
+				Operation: orig.Operation,
+				Namespace: view.db + "." + view.col,
+				Source:    gtm.DirectQuerySource,
+				Timestamp: orig.Timestamp,
+			}
+		}
 	}
 	return
 }
@@ -504,26 +495,27 @@ func NotMongoFlux(op *gtm.Op) bool {
 	return op.GetDatabase() != Name
 }
 
-func ResumeWork(ctx *gtm.OpCtx, session *mgo.Session, config *configOptions) {
-	col := session.DB(Name).C("resume")
-	doc := make(map[string]interface{})
-	col.FindId(config.ResumeName).One(doc)
-	if doc["ts"] != nil {
-		ts := doc["ts"].(bson.MongoTimestamp)
-		ctx.Since(ts)
+func saveTimestamp(client *mongo.Client, ts primitive.Timestamp, config *configOptions) error {
+	col := client.Database(Name).Collection("resume")
+	doc := map[string]interface{}{
+		"ts": ts,
 	}
-	ctx.Resume()
-}
-
-func SaveTimestamp(session *mgo.Session, ts bson.MongoTimestamp, resumeName string) error {
-	col := session.DB(Name).C("resume")
-	doc := make(map[string]interface{})
-	doc["ts"] = ts
-	_, err := col.UpsertId(resumeName, bson.M{"$set": doc})
+	opts := options.Update()
+	opts.SetUpsert(true)
+	_, err := col.UpdateOne(context.Background(), bson.M{
+		"_id": config.ResumeName,
+	}, bson.M{
+		"$set": doc,
+	}, opts)
 	return err
 }
 
 func (config *configOptions) onlyMeasured() gtm.OpFilter {
+	if config.ChangeStreams {
+		return func(op *gtm.Op) bool {
+			return true
+		}
+	}
 	measured := make(map[string]bool)
 	for _, m := range config.Measurement {
 		measured[m.Namespace] = true
@@ -546,8 +538,6 @@ func (config *configOptions) ParseCommandLineFlags() *configOptions {
 	flag.IntVar(&config.InfluxClients, "influx-clients", 0, "The number of concurrent InfluxDB clients")
 	flag.IntVar(&config.InfluxBufferSize, "influx-buffer-size", 0, "After this number of points the batch is flushed to InfluxDB")
 	flag.StringVar(&config.MongoURL, "mongo-url", "", "MongoDB connection URL")
-	flag.StringVar(&config.MongoPemFile, "mongo-pem-file", "", "Path to a PEM file for secure connections to MongoDB")
-	flag.BoolVar(&config.MongoSkipVerify, "mongo-skip-verify", false, "Set to true to skip https certificate validator for MongoDB")
 	flag.StringVar(&config.MongoOpLogDatabaseName, "mongo-oplog-database-name", "", "Override the database name which contains the mongodb oplog")
 	flag.StringVar(&config.MongoOpLogCollectionName, "mongo-oplog-collection-name", "", "Override the collection name which contains the mongodb oplog")
 	flag.StringVar(&config.ConfigFile, "f", "", "Location of configuration file")
@@ -599,7 +589,6 @@ func (config *configOptions) LoadPlugin() *configOptions {
 func (config *configOptions) LoadConfigFile() *configOptions {
 	if config.ConfigFile != "" {
 		var tomlConfig configOptions = configOptions{
-			MongoDialSettings:  mongoDialSettings{Timeout: -1},
 			GtmSettings:        GtmDefaultSettings(),
 			InfluxAutoCreateDB: true,
 		}
@@ -635,12 +624,6 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 		if config.MongoURL == "" {
 			config.MongoURL = tomlConfig.MongoURL
 		}
-		if config.MongoPemFile == "" {
-			config.MongoPemFile = tomlConfig.MongoPemFile
-		}
-		if config.MongoSkipVerify == false {
-			config.MongoSkipVerify = tomlConfig.MongoSkipVerify
-		}
 		if config.MongoOpLogDatabaseName == "" {
 			config.MongoOpLogDatabaseName = tomlConfig.MongoOpLogDatabaseName
 		}
@@ -674,7 +657,6 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 		if config.PluginPath == "" {
 			config.PluginPath = tomlConfig.PluginPath
 		}
-		config.MongoDialSettings = tomlConfig.MongoDialSettings
 		config.GtmSettings = tomlConfig.GtmSettings
 		config.Measurement = tomlConfig.Measurement
 	}
@@ -684,7 +666,9 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 func (config *configOptions) InfluxTLS() (*tls.Config, error) {
 	certs := x509.NewCertPool()
 	if ca, err := ioutil.ReadFile(config.InfluxPemFile); err == nil {
-		certs.AppendCertsFromPEM(ca)
+		if ok := certs.AppendCertsFromPEM(ca); !ok {
+			errorLog.Printf("No certs parsed successfully from %s", config.InfluxPemFile)
+		}
 	} else {
 		return nil, err
 
@@ -709,80 +693,71 @@ func (config *configOptions) SetDefaults() *configOptions {
 	if config.ResumeName == "" {
 		config.ResumeName = resumeNameDefault
 	}
-	if config.MongoDialSettings.Timeout < 0 {
-		config.MongoDialSettings.Timeout = 30
-	}
 	return config
 }
 
-func (config *configOptions) timeoutConnection(mongoOk chan bool) {
+func cleanMongoURL(URL string) string {
+	const (
+		redact    = "REDACTED"
+		scheme    = "mongodb://"
+		schemeSrv = "mongodb+srv://"
+	)
+	url := URL
+	hasScheme := strings.HasPrefix(url, scheme)
+	hasSchemeSrv := strings.HasPrefix(url, schemeSrv)
+	url = strings.TrimPrefix(url, scheme)
+	url = strings.TrimPrefix(url, schemeSrv)
+	userEnd := strings.IndexAny(url, "@")
+	if userEnd != -1 {
+		url = redact + "@" + url[userEnd+1:]
+	}
+	if hasScheme {
+		url = scheme + url
+	} else if hasSchemeSrv {
+		url = schemeSrv + url
+	}
+	return url
+}
+
+func (config *configOptions) cancelConnection(mongoOk chan bool) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 	defer signal.Stop(sigs)
-	deadline := time.Duration(config.MongoDialSettings.Timeout) * time.Second
-	connT := time.NewTicker(deadline)
-	defer connT.Stop()
 	select {
 	case <-mongoOk:
 		return
 	case <-sigs:
 		os.Exit(exitStatus)
-	case <-connT.C:
-		errorLog.Fatalf("Unable to connect to MongoDB using URL %s: timed out after %d seconds",
-			config.MongoURL, config.MongoDialSettings.Timeout)
 	}
 }
 
-func (config *configOptions) DialMongo() (*mgo.Session, error) {
-	dialInfo, err := mgo.ParseURL(config.MongoURL)
+func (config *configOptions) DialMongo() (*mongo.Client, error) {
+	rb := bson.NewRegistryBuilder()
+	rb.RegisterTypeMapEntry(bsontype.DateTime, reflect.TypeOf(time.Time{}))
+	reg := rb.Build()
+	clientOptions := options.Client()
+	clientOptions.ApplyURI(config.MongoURL)
+	clientOptions.SetAppName(Name)
+	clientOptions.SetRegistry(reg)
+	if config.Resume && config.ResumeWriteUnsafe {
+		clientOptions.SetWriteConcern(writeconcern.New(writeconcern.W(0), writeconcern.J(false)))
+	}
+	client, err := mongo.NewClient(clientOptions)
 	if err != nil {
 		return nil, err
 	}
-	timeout := time.Duration(config.MongoDialSettings.Timeout) * time.Second
-	dialInfo.AppName = "mongofluxd"
-	dialInfo.Timeout = time.Duration(0)
-	if timeout > 0 {
-		dialInfo.ReadTimeout = timeout
-		dialInfo.WriteTimeout = timeout
-	}
-	ssl := config.MongoDialSettings.Ssl || config.MongoPemFile != ""
-	if ssl {
-		tlsConfig := &tls.Config{}
-		if config.MongoPemFile != "" {
-			certs := x509.NewCertPool()
-			if ca, err := ioutil.ReadFile(config.MongoPemFile); err == nil {
-				certs.AppendCertsFromPEM(ca)
-			} else {
-				return nil, err
-			}
-			tlsConfig.RootCAs = certs
-		}
-		// Check to see if we don't need to validate the PEM
-		if config.MongoSkipVerify {
-			// Turn off validation
-			tlsConfig.InsecureSkipVerify = true
-		}
-		dialInfo.DialServer = func(addr *mgo.ServerAddr) (net.Conn, error) {
-			conn, err := tls.Dial("tcp", addr.String(), tlsConfig)
-			if err != nil {
-				errorLog.Printf("Unable to dial MongoDB: %s", err)
-			}
-			return conn, err
-		}
-	}
 	mongoOk := make(chan bool)
-	if timeout > 0 {
-		go config.timeoutConnection(mongoOk)
+	go config.cancelConnection(mongoOk)
+	err = client.Connect(context.Background())
+	if err != nil {
+		return nil, err
 	}
-	session, err := mgo.DialWithInfo(dialInfo)
+	err = client.Ping(context.Background(), nil)
+	if err != nil {
+		return nil, err
+	}
 	close(mongoOk)
-	if err == nil {
-		if timeout > 0 {
-			session.SetSyncTimeout(timeout)
-		}
-	}
-	return session, err
-
+	return client, nil
 }
 
 func GtmDefaultSettings() gtmSettings {
@@ -793,10 +768,18 @@ func GtmDefaultSettings() gtmSettings {
 	}
 }
 
+func saveTimestampFromReplStatus(client *mongo.Client, config *configOptions) {
+	if rs, err := gtm.GetReplStatus(client); err == nil {
+		var ts primitive.Timestamp
+		if ts, err = rs.GetLastCommitted(); err == nil {
+			saveTimestamp(client, ts, config)
+		}
+	}
+}
+
 func main() {
 	config := &configOptions{
-		MongoDialSettings: mongoDialSettings{Timeout: -1},
-		GtmSettings:       GtmDefaultSettings(),
+		GtmSettings: GtmDefaultSettings(),
 	}
 	config.ParseCommandLineFlags()
 	if config.Version {
@@ -810,12 +793,10 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 	defer signal.Stop(sigs)
 
-	mongo, err := config.DialMongo()
+	mongoClient, err := config.DialMongo()
 	if err != nil {
-		errorLog.Panicf("Unable to connect to mongodb using URL %s: %s", config.MongoURL, err)
-	}
-	if config.Resume && config.ResumeWriteUnsafe {
-		mongo.SetSafe(nil)
+		errorLog.Panicf("Unable to connect to mongodb using URL %s: %s",
+			cleanMongoURL(config.MongoURL), err)
 	}
 
 	go func() {
@@ -824,39 +805,43 @@ func main() {
 	}()
 
 	var after gtm.TimestampGenerator = nil
-	if config.Resume {
-		after = func(session *mgo.Session, options *gtm.Options) bson.MongoTimestamp {
-			ts := gtm.LastOpTimestamp(session, options)
-			if config.Replay {
-				ts = bson.MongoTimestamp(0)
-			} else if config.ResumeFromTimestamp != 0 {
-				ts = bson.MongoTimestamp(config.ResumeFromTimestamp)
-			} else {
-				collection := session.DB(Name).C("resume")
+	if config.Replay {
+		after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
+			return primitive.Timestamp{}, nil
+		}
+	} else if config.ResumeFromTimestamp != 0 {
+		after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
+			return primitive.Timestamp{
+				T: uint32(config.ResumeFromTimestamp),
+				I: 1,
+			}, nil
+		}
+	} else if config.Resume {
+		after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
+			var ts primitive.Timestamp
+			col := client.Database(Name).Collection("resume")
+			result := col.FindOne(context.Background(), bson.M{
+				"_id": config.ResumeName,
+			})
+			if err = result.Err(); err == nil {
 				doc := make(map[string]interface{})
-				collection.FindId(config.ResumeName).One(doc)
-				if doc["ts"] != nil {
-					ts = doc["ts"].(bson.MongoTimestamp)
+				if err = result.Decode(&doc); err == nil {
+					if doc["ts"] != nil {
+						ts = doc["ts"].(primitive.Timestamp)
+					}
 				}
 			}
-			return ts
-		}
-	} else if config.Replay {
-		after = func(session *mgo.Session, options *gtm.Options) bson.MongoTimestamp {
-			return bson.MongoTimestamp(0)
+			if ts.T == 0 {
+				ts, _ = gtm.LastOpTimestamp(client, options)
+			}
+			infoLog.Printf("Resuming from timestamp %+v", ts)
+			return ts, nil
 		}
 	}
 
 	var filter gtm.OpFilter = nil
 	filterChain := []gtm.OpFilter{NotMongoFlux, config.onlyMeasured(), IsInsertOrUpdate}
 	filter = gtm.ChainOpFilters(filterChain...)
-	var oplogDatabaseName, oplogCollectionName *string
-	if config.MongoOpLogDatabaseName != "" {
-		oplogDatabaseName = &config.MongoOpLogDatabaseName
-	}
-	if config.MongoOpLogCollectionName != "" {
-		oplogCollectionName = &config.MongoOpLogCollectionName
-	}
 	gtmBufferDuration, err := time.ParseDuration(config.GtmSettings.BufferDuration)
 	if err != nil {
 		errorLog.Panicf("Unable to parse gtm buffer duration %s: %s", config.GtmSettings.BufferDuration, err)
@@ -894,13 +879,13 @@ func main() {
 			changeStreamNs = append(changeStreamNs, m.Namespace)
 		}
 	}
-	gtmCtx := gtm.Start(mongo, &gtm.Options{
+	gtmCtx := gtm.Start(mongoClient, &gtm.Options{
 		After:               after,
 		Log:                 errorLog,
 		NamespaceFilter:     filter,
 		OpLogDisabled:       len(changeStreamNs) > 0,
-		OpLogDatabaseName:   oplogDatabaseName,
-		OpLogCollectionName: oplogCollectionName,
+		OpLogDatabaseName:   config.MongoOpLogDatabaseName,
+		OpLogCollectionName: config.MongoOpLogCollectionName,
 		ChannelSize:         config.GtmSettings.ChannelSize,
 		Ordering:            gtm.AnyOrder,
 		WorkerCount:         4,
@@ -922,7 +907,7 @@ func main() {
 				dbs:      make(map[string]bool),
 				measures: make(map[string]*InfluxMeasure),
 				config:   config,
-				mongo:    mongo,
+				client:   mongoClient,
 			}
 			if err := influx.setupMeasurements(); err != nil {
 				errorLog.Panicf("Configuration error: %s", err)
@@ -961,7 +946,11 @@ func main() {
 		go func() {
 			gtmCtx.DirectReadWg.Wait()
 			infoLog.Println("Direct reads completed")
+			if config.Resume {
+				saveTimestampFromReplStatus(mongoClient, config)
+			}
 			if config.ExitAfterDirectReads {
+				infoLog.Println("Stopping all workers")
 				gtmCtx.Stop()
 				wg.Wait()
 				stopC <- true
@@ -969,7 +958,7 @@ func main() {
 		}()
 	}
 	<-stopC
-	mongo.Close()
+	mongoClient.Disconnect(context.Background())
 	influxClient.Close()
 	os.Exit(exitStatus)
 }
