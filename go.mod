@@ -6,7 +6,7 @@ require (
 	github.com/influxdata/influxdb v1.7.3
 	github.com/influxdata/platform v0.0.0-20190117200541-d500d3cf5589 // indirect
 	github.com/pkg/errors v0.8.1 // indirect
-	github.com/rwynn/gtm v0.0.0-20190419152047-ef943df44083
+	github.com/rwynn/gtm v0.0.0-20190425144548-c9e803d08984
 	github.com/serialx/hashring v0.0.0-20180504054112-49a4782e9908 // indirect
 	github.com/tidwall/pretty v0.0.0-20190325153808-1166b9ac2b65 // indirect
 	github.com/xdg/scram v0.0.0-20180814205039-7eeb5667e42c // indirect
