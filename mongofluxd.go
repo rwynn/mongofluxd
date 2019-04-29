@@ -8,7 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
-	"github.com/influxdata/influxdb/client/v2"
+	"github.com/influxdata/influxdb1-client/v2"
 	"github.com/rwynn/gtm"
 	"github.com/rwynn/mongofluxd/mongofluxdplug"
 	"go.mongodb.org/mongo-driver/bson"

@@ -1,6 +1,11 @@
 # mongofluxd
 Real time sync from MongoDB into InfluxDB
 
+### Requirements
+
+This tool supports MongoDB 3.6+ and InfluxDB 1.X. The go driver for InfluxDB 2.X has not yet been released so this
+tool has only been tested to work with InfluxDB 1.X.  
+
 ### Installation
 
 Download the latest [release](https://github.com/rwynn/mongofluxd/releases) or install with golang 1.11 and above
