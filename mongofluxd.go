@@ -344,12 +344,13 @@ func (m *InfluxDataMap) loadKV(k string, v interface{}) {
 	}
 }
 
-func (m *InfluxDataMap) resolveName(tags map[string]string, fields map[string]interface{}) error {
+func (m *InfluxDataMap) resolveName(tags map[string]string, fields, doc map[string]interface{}) error {
 	if m.nameTpl != nil {
 		var b bytes.Buffer
 		env := map[string]interface{}{
 			"Tags":   tags,
 			"Fields": fields,
+			"Doc":    doc,
 		}
 		if err := m.nameTpl.Execute(&b, env); err != nil {
 			return err
@@ -455,7 +456,7 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 				return err
 			}
 			for _, pt := range points {
-				if err := mapper.resolveName(pt.Tags, pt.Fields); err != nil {
+				if err := mapper.resolveName(pt.Tags, pt.Fields, op.Data); err != nil {
 					return err
 				}
 				pt, err := client.NewPoint(mapper.name, pt.Tags, pt.Fields, pt.Timestamp)
@@ -468,7 +469,7 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 			if err := mapper.loadData(); err != nil {
 				return err
 			}
-			if err := mapper.resolveName(mapper.tags, mapper.fields); err != nil {
+			if err := mapper.resolveName(mapper.tags, mapper.fields, op.Data); err != nil {
 				return err
 			}
 			pt, err := client.NewPoint(mapper.name, mapper.tags, mapper.fields, mapper.t)

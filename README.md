@@ -87,8 +87,8 @@ fields = ["sales", "price"]
 retention = "RP1" 
 # override the measurement name which defaults to the name of the MongoDB collection
 measure = "sales"
-# the measurement name can be calculated from the Fields or Tags in a golang template
-# measure = "{{.Tags.category}}_{{.Fields.price}}"
+# the measurement name can be calculated from the Fields, Tags, or Doc in a golang template
+# measure = "{{.Tags.category}}_{{.Fields.price}}_{{.Doc.name}}"
 # override the influx database name which default to the name of the MongoDB database
 database = "salesdb"
 
