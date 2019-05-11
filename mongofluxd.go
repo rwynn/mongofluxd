@@ -107,8 +107,8 @@ type InfluxMeasure struct {
 	measure    string
 	measureTpl *template.Template
 	database   string
-	tags       map[string]bool
-	fields     map[string]bool
+	tags       map[string]string
+	fields     map[string]string
 	plug       func(*mongofluxdplug.MongoDocument) ([]*mongofluxdplug.InfluxPoint, error)
 }
 
@@ -169,8 +169,8 @@ func (ctx *InfluxCtx) setupMeasurements() error {
 				measure:   ms.Measure,
 				database:  ms.Database,
 				plug:      ms.plug,
-				tags:      make(map[string]bool),
-				fields:    make(map[string]bool),
+				tags:      make(map[string]string),
+				fields:    make(map[string]string),
 			}
 			if ms.View != "" {
 				im.ns = ms.View
@@ -197,10 +197,20 @@ func (ctx *InfluxCtx) setupMeasurements() error {
 				im.precision = "s"
 			}
 			for _, tag := range ms.Tags {
-				im.tags[tag] = true
+				names := strings.SplitN(tag, ":", 2)
+				if len(names) < 2 {
+					im.tags[names[0]] = names[0]
+				} else {
+					im.tags[names[0]] = names[1]
+				}
 			}
 			for _, field := range ms.Fields {
-				im.fields[field] = true
+				names := strings.SplitN(field, ":", 2)
+				if len(names) < 2 {
+					im.fields[names[0]] = names[0]
+				} else {
+					im.fields[names[0]] = names[1]
+				}
 			}
 			if im.plug == nil {
 				if len(im.fields) == 0 {
@@ -329,15 +339,15 @@ func (m *InfluxDataMap) unsupportedType(op *gtm.Op, k string, v interface{}, kin
 }
 
 func (m *InfluxDataMap) loadKV(k string, v interface{}) {
-	if m.measure.tags[k] {
+	if name, ok := m.measure.tags[k]; ok {
 		if m.istagtype(v) {
-			m.tags[k] = v.(string)
+			m.tags[name] = v.(string)
 		} else {
 			m.unsupportedType(m.op, k, v, "tag")
 		}
-	} else if m.measure.fields[k] {
+	} else if name, ok := m.measure.fields[k]; ok {
 		if m.isfieldtype(v) {
-			m.fields[k] = v
+			m.fields[name] = v
 		} else {
 			m.unsupportedType(m.op, k, v, "field")
 		}
