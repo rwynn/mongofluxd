@@ -837,6 +837,7 @@ func main() {
 				if err = result.Decode(&doc); err == nil {
 					if doc["ts"] != nil {
 						ts = doc["ts"].(primitive.Timestamp)
+						ts.I += 1
 					}
 				}
 			}
