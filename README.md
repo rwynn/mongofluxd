@@ -70,6 +70,7 @@ exit-after-direct-reads = true
 namespace = "test.test"
 # fields must be document properties of type int, float, bool, or string
 # nested fields like "e.f" are supported, e.g. { e: { f: 1.5 }}
+# you can rename nested fields to simplify them in InfluxDB by using a colon, e.g. "e.f:foo"
 fields = ["c", "d"]
 # optionally override the field to take time from.  defaults to the insertion ts at second precision
 # recommended if you need ms precision.  use Mongo's native Date object to get ms precision
@@ -80,7 +81,9 @@ precision = "ms"
 
 [[measurement]]
 namespace = "db.products"
-# optional tags must be top level document properties with string values
+# optional tags must be document properties with string values
+# nested tags like "e.f" are supported, e.g. { e: { f: "red" }}
+# you can rename nested tags to simplify them in InfluxDB by using a colon, e.g. "e.f:color"
 tags = ["sku", "category"]
 fields = ["sales", "price"]
 # set the retention policy for this measurement
