@@ -1,1 +1,1 @@
-rwynn/mongofluxd:1.0.6
+rwynn/mongofluxd:1.1.0
