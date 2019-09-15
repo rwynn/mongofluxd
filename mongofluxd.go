@@ -7,16 +7,6 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/influxdata/influxdb1-client/v2"
-	"github.com/rwynn/gtm"
-	"github.com/rwynn/mongofluxd/mongofluxdplug"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/bsontype"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 	"io/ioutil"
 	"log"
 	"os"
@@ -28,6 +18,17 @@ import (
 	"syscall"
 	"text/template"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	client "github.com/influxdata/influxdb1-client/v2"
+	"github.com/rwynn/gtm"
+	"github.com/rwynn/mongofluxd/mongofluxdplug"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsontype"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 )
 
 var exitStatus = 0
@@ -36,7 +37,7 @@ var errorLog *log.Logger = log.New(os.Stdout, "ERROR ", log.Flags())
 
 const (
 	Name                  = "mongofluxd"
-	Version               = "1.1.0"
+	Version               = "1.1.1"
 	mongoUrlDefault       = "mongodb://localhost:27017"
 	influxUrlDefault      = "http://localhost:8086"
 	influxClientsDefault  = 10
