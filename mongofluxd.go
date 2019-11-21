@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"plugin"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,6 +47,27 @@ const (
 	gtmChannelSizeDefault = 512
 )
 
+type resumeStrategy int
+
+const (
+	timestampResumeStrategy resumeStrategy = iota
+	tokenResumeStrategy
+)
+
+func (arg *resumeStrategy) String() string {
+	return fmt.Sprintf("%d", *arg)
+}
+
+func (arg *resumeStrategy) Set(value string) (err error) {
+	var i int
+	if i, err = strconv.Atoi(value); err != nil {
+		return
+	}
+	rs := resumeStrategy(i)
+	*arg = rs
+	return
+}
+
 type gtmSettings struct {
 	ChannelSize    int    `toml:"channel-size"`
 	BufferSize     int    `toml:"buffer-size"`
@@ -75,8 +97,9 @@ type configOptions struct {
 	Version                  bool
 	Verbose                  bool
 	Resume                   bool
-	ResumeWriteUnsafe        bool  `toml:"resume-write-unsafe"`
-	ResumeFromTimestamp      int64 `toml:"resume-from-timestamp"`
+	ResumeStrategy           resumeStrategy `toml:"resume-strategy"`
+	ResumeWriteUnsafe        bool           `toml:"resume-write-unsafe"`
+	ResumeFromTimestamp      int64          `toml:"resume-from-timestamp"`
 	Replay                   bool
 	ConfigFile               string
 	Measurement              []*measureSettings
@@ -121,6 +144,7 @@ type InfluxCtx struct {
 	config   *configOptions
 	lastTs   primitive.Timestamp
 	client   *mongo.Client
+	tokens   bson.M
 }
 
 type InfluxDataMap struct {
@@ -152,7 +176,11 @@ func (im *InfluxMeasure) parseView(view string) error {
 
 func (ctx *InfluxCtx) saveTs() (err error) {
 	if ctx.config.Resume && ctx.lastTs.T > 0 {
-		err = saveTimestamp(ctx.client, ctx.lastTs, ctx.config)
+		if ctx.config.ResumeStrategy == tokenResumeStrategy {
+			err = saveTokens(ctx.client, ctx.tokens, ctx.config)
+		} else {
+			err = saveTimestamp(ctx.client, ctx.lastTs, ctx.config)
+		}
 		ctx.lastTs = primitive.Timestamp{}
 	}
 	return
@@ -490,6 +518,9 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 			bp.AddPoint(pt)
 		}
 		ctx.lastTs = op.Timestamp
+		if ctx.config.ResumeStrategy == tokenResumeStrategy {
+			ctx.tokens[op.ResumeToken.StreamID] = op.ResumeToken.ResumeToken
+		}
 		if len(bp.Points()) >= ctx.config.InfluxBufferSize {
 			if err := ctx.writeBatch(); err != nil {
 				return err
@@ -505,6 +536,34 @@ func IsInsertOrUpdate(op *gtm.Op) bool {
 
 func NotMongoFlux(op *gtm.Op) bool {
 	return op.GetDatabase() != Name
+}
+
+func saveTokens(client *mongo.Client, tokens bson.M, config *configOptions) error {
+	var err error
+	if len(tokens) == 0 {
+		return err
+	}
+	col := client.Database(Name).Collection("tokens")
+	bwo := options.BulkWrite().SetOrdered(false)
+	var models []mongo.WriteModel
+	for streamID, token := range tokens {
+		filter := bson.M{
+			"resumeName": config.ResumeName,
+			"streamID":   streamID,
+		}
+		replacement := bson.M{
+			"resumeName": config.ResumeName,
+			"streamID":   streamID,
+			"token":      token,
+		}
+		model := mongo.NewReplaceOneModel()
+		model.SetUpsert(true)
+		model.SetFilter(filter)
+		model.SetReplacement(replacement)
+		models = append(models, model)
+	}
+	_, err = col.BulkWrite(context.Background(), models, bwo)
+	return err
 }
 
 func saveTimestamp(client *mongo.Client, ts primitive.Timestamp, config *configOptions) error {
@@ -556,6 +615,7 @@ func (config *configOptions) ParseCommandLineFlags() *configOptions {
 	flag.BoolVar(&config.Version, "v", false, "True to print the version number")
 	flag.BoolVar(&config.Verbose, "verbose", false, "True to output verbose messages")
 	flag.BoolVar(&config.Resume, "resume", false, "True to capture the last timestamp of this run and resume on a subsequent run")
+	flag.Var(&config.ResumeStrategy, "resume-strategy", "Strategy to use for resuming. 0=timestamp,1=token")
 	flag.Int64Var(&config.ResumeFromTimestamp, "resume-from-timestamp", 0, "Timestamp to resume syncing from")
 	flag.BoolVar(&config.ResumeWriteUnsafe, "resume-write-unsafe", false, "True to speedup writes of the last timestamp synched for resuming at the cost of error checking")
 	flag.BoolVar(&config.Replay, "replay", false, "True to replay all events from the oplog and index them in elasticsearch")
@@ -660,6 +720,9 @@ func (config *configOptions) LoadConfigFile() *configOptions {
 		}
 		if !config.Resume && tomlConfig.Resume {
 			config.Resume = true
+		}
+		if config.ResumeStrategy == 0 {
+			config.ResumeStrategy = tomlConfig.ResumeStrategy
 		}
 		if !config.ResumeWriteUnsafe && tomlConfig.ResumeWriteUnsafe {
 			config.ResumeWriteUnsafe = true
@@ -825,38 +888,63 @@ func main() {
 	}()
 
 	var after gtm.TimestampGenerator = nil
-	if config.Replay {
-		after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
-			return primitive.Timestamp{}, nil
+	if config.ResumeStrategy == timestampResumeStrategy {
+		if config.Replay {
+			after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
+				return primitive.Timestamp{}, nil
+			}
+		} else if config.ResumeFromTimestamp != 0 {
+			after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
+				return primitive.Timestamp{
+					T: uint32(config.ResumeFromTimestamp),
+					I: 1,
+				}, nil
+			}
+		} else if config.Resume {
+			after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
+				var ts primitive.Timestamp
+				col := client.Database(Name).Collection("resume")
+				result := col.FindOne(context.Background(), bson.M{
+					"_id": config.ResumeName,
+				})
+				if err = result.Err(); err == nil {
+					doc := make(map[string]interface{})
+					if err = result.Decode(&doc); err == nil {
+						if doc["ts"] != nil {
+							ts = doc["ts"].(primitive.Timestamp)
+							ts.I += 1
+						}
+					}
+				}
+				if ts.T == 0 {
+					ts, _ = gtm.LastOpTimestamp(client, options)
+				}
+				infoLog.Printf("Resuming from timestamp %+v", ts)
+				return ts, nil
+			}
 		}
-	} else if config.ResumeFromTimestamp != 0 {
-		after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
-			return primitive.Timestamp{
-				T: uint32(config.ResumeFromTimestamp),
-				I: 1,
-			}, nil
-		}
-	} else if config.Resume {
-		after = func(client *mongo.Client, options *gtm.Options) (primitive.Timestamp, error) {
-			var ts primitive.Timestamp
-			col := client.Database(Name).Collection("resume")
+	}
+	var token gtm.ResumeTokenGenenerator = nil
+	if config.Resume && config.ResumeStrategy == tokenResumeStrategy {
+		token = func(client *mongo.Client, streamID string, options *gtm.Options) (interface{}, error) {
+			var t interface{} = nil
+			var err error
+			col := client.Database(Name).Collection("tokens")
 			result := col.FindOne(context.Background(), bson.M{
-				"_id": config.ResumeName,
+				"resumeName": config.ResumeName,
+				"streamID":   streamID,
 			})
 			if err = result.Err(); err == nil {
 				doc := make(map[string]interface{})
 				if err = result.Decode(&doc); err == nil {
-					if doc["ts"] != nil {
-						ts = doc["ts"].(primitive.Timestamp)
-						ts.I += 1
+					t = doc["token"]
+					if t != nil {
+						infoLog.Printf("Resuming stream '%s' from collection %s.tokens using resume name '%s'",
+							streamID, Name, config.ResumeName)
 					}
 				}
 			}
-			if ts.T == 0 {
-				ts, _ = gtm.LastOpTimestamp(client, options)
-			}
-			infoLog.Printf("Resuming from timestamp %+v", ts)
-			return ts, nil
+			return t, err
 		}
 	}
 
@@ -902,6 +990,7 @@ func main() {
 	}
 	gtmCtx := gtm.Start(mongoClient, &gtm.Options{
 		After:               after,
+		Token:               token,
 		Log:                 infoLog,
 		NamespaceFilter:     filter,
 		OpLogDisabled:       len(changeStreamNs) > 0,
@@ -929,6 +1018,7 @@ func main() {
 				measures: make(map[string]*InfluxMeasure),
 				config:   config,
 				client:   mongoClient,
+				tokens:   bson.M{},
 			}
 			if err := influx.setupMeasurements(); err != nil {
 				errorLog.Panicf("Configuration error: %s", err)
@@ -967,7 +1057,7 @@ func main() {
 		go func() {
 			gtmCtx.DirectReadWg.Wait()
 			infoLog.Println("Direct reads completed")
-			if config.Resume {
+			if config.Resume && config.ResumeStrategy == timestampResumeStrategy {
 				saveTimestampFromReplStatus(mongoClient, config)
 			}
 			if config.ExitAfterDirectReads {

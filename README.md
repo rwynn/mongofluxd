@@ -49,6 +49,9 @@ replay = false
 resume = false
 # save the timestamps of processed events for resuming later
 
+resume-strategy = 1
+# use 0, default, for timestamps (MongoDB 4+) or use 1 for tokens (MongoDB 3.6+)
+
 resume-name = "mongofluxd"
 # the key to store timestamps under in the collection mongoflux.resume
 
