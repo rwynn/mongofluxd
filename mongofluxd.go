@@ -176,8 +176,14 @@ func (im *InfluxMeasure) parseView(view string) error {
 
 func (ctx *InfluxCtx) saveTs() (err error) {
 	if ctx.config.Resume && ctx.lastTs.T > 0 {
+		if err = ctx.writeBatch(); err != nil {
+			return err
+		}
 		if ctx.config.ResumeStrategy == tokenResumeStrategy {
 			err = saveTokens(ctx.client, ctx.tokens, ctx.config)
+			if err == nil {
+				ctx.tokens = bson.M{}
+			}
 		} else {
 			err = saveTimestamp(ctx.client, ctx.lastTs, ctx.config)
 		}
@@ -1043,11 +1049,10 @@ func main() {
 				case op, open := <-gtmCtx.OpC:
 					if op == nil {
 						if !open {
-							if err := influx.writeBatch(); err != nil {
+							if err := influx.saveTs(); err != nil {
 								exitStatus = 1
 								errorLog.Println(err)
 							}
-							influx.saveTs()
 							return
 						}
 						break
