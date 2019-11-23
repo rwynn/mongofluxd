@@ -520,9 +520,11 @@ func (ctx *InfluxCtx) addPoint(op *gtm.Op) error {
 			}
 			bp.AddPoint(pt)
 		}
-		ctx.lastTs = op.Timestamp
-		if ctx.config.ResumeStrategy == tokenResumeStrategy {
-			ctx.tokens[op.ResumeToken.StreamID] = op.ResumeToken.ResumeToken
+		if op.IsSourceOplog() {
+			ctx.lastTs = op.Timestamp
+			if ctx.config.ResumeStrategy == tokenResumeStrategy {
+				ctx.tokens[op.ResumeToken.StreamID] = op.ResumeToken.ResumeToken
+			}
 		}
 		if len(bp.Points()) >= ctx.config.InfluxBufferSize {
 			if err := ctx.writeBatch(); err != nil {
