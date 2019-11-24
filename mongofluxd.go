@@ -556,15 +556,15 @@ func saveTokens(client *mongo.Client, tokens bson.M, config *configOptions) erro
 			"resumeName": config.ResumeName,
 			"streamID":   streamID,
 		}
-		replacement := bson.M{
+		update := bson.M{"$set": bson.M{
 			"resumeName": config.ResumeName,
 			"streamID":   streamID,
 			"token":      token,
-		}
-		model := mongo.NewReplaceOneModel()
+		}}
+		model := mongo.NewUpdateManyModel()
 		model.SetUpsert(true)
 		model.SetFilter(filter)
-		model.SetReplacement(replacement)
+		model.SetUpdate(update)
 		models = append(models, model)
 	}
 	_, err = col.BulkWrite(context.Background(), models, bwo)
