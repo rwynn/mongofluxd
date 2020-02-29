@@ -1,1 +1,1 @@
-rwynn/mongofluxd:1.2.1
+rwynn/mongofluxd:1.2.2
